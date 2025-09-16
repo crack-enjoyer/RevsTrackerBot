@@ -1,0 +1,41 @@
+{
+  "name": "solana-wallet-monitor-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for monitoring Solana wallet transactions",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "jest"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "solana",
+    "blockchain",
+    "wallet",
+    "monitor"
+  ],
+  "author": "Arbitka",
+  "license": "MIT",
+  "dependencies": {
+    "telegraf": "^4.12.2",
+    "@solana/web3.js": "^1.78.4",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1",
+    "jest": "^29.6.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://gitverse.com/leflop/solana-wallet-monitor-bot"
+  },
+  "bugs": {
+    "url": "https://gitverse.com/leflop/solana-wallet-monitor-bot/issues"
+  },
+  "homepage": "https://gitverse.com/leflop/solana-wallet-monitor-bot#readme"
+}
