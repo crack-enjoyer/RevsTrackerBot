@@ -33,6 +33,27 @@ class SolanaWalletMonitor {
         }
     }
 
+    // --- helper-функции (внутри класса) ---
+    encodeAmount(amount) {
+      // Преобразуем число в строку и заменим '.' на '_' чтобы callback_data было "безопасным"
+      return amount.toString().replace(/\./g, '_');
+    }
+
+    decodeAmount(encoded) {
+      // Обратно: '_' -> '.'
+      return parseFloat(encoded.replace(/_/g, '.'));
+    }
+
+    escapeMarkdownV2(text) {
+      return text.toString().replace(/([_*\[\]()~`>#+\-=|{}.!])/g, '\\$1');
+    }
+
+    // Небольшая утилита сравнения float с допуском
+    floatEq(a, b, eps = 1e-9) {
+      return Math.abs(a - b) < eps;
+    }
+
+
     async loadUserData() {
         try {
             const data = await fs.readFile('user_data.json', 'utf8');
@@ -75,8 +96,6 @@ You will receive notifications on RevShare: PlatformFee transactions\\
 /settings \\ Manage filters \\(min SOL amount, blacklist\\)
 /unsubscribe \\ Stop receiving notifications
 /help \\ Show this message again
-
-You will receive notifications on RevShare: PlatformFee transactions \\
             `;
             ctx.replyWithMarkdownV2(welcomeMessage);
         });
@@ -94,7 +113,7 @@ You will receive notifications on RevShare: PlatformFee transactions \\
 \`${this.monitoredWallet || 'Not configured'}\`
 
 *Settings:*
-• Set minimum amount SOL
+• Add fixed amount of SOL
 • Manage blacklist
             `);
         });
@@ -112,28 +131,112 @@ You will receive notifications on RevShare: PlatformFee transactions \\
             ctx.reply('✅ You have been unsubscribed from wallet notifications.');
         });
 
-        // Handle callback queries for settings
-        this.bot.action('set_min_amount', (ctx) => {
-            ctx.answerCbQuery();
-            ctx.reply('💰 Please enter the minimum SOL amount (e.g., 0.1):');
-            
-            // Set up one-time listener for the next message
-            this.bot.hears(/^\d*\.?\d+$/, (msgCtx) => {
-                if (msgCtx.chat.id === ctx.chat.id) {
-                    const amount = parseFloat(msgCtx.message.text);
-                    const settings = this.userSettings.get(ctx.chat.id) || { minAmount: 0, blacklist: [] };
-                    settings.minAmount = amount;
-                    this.userSettings.set(ctx.chat.id, settings);
-                    this.saveUserData();
-                    msgCtx.reply(`✅ Minimum amount set to ${amount} SOL`);
-                }
-            });
+        // --- Add new amount (callback 'amount_add') ---
+        this.bot.action('amount_add', async (ctx) => {
+          await ctx.answerCbQuery();
+          const chatId = ctx.chat.id;
+          await ctx.reply('💰 Please enter a new fixed SOL amount (e.g., 0.5):');
+
+          const handler = (msgCtx) => {
+            if (msgCtx.chat.id !== chatId) return;
+            const newVal = parseFloat(msgCtx.message.text);
+            if (isNaN(newVal)) {
+              return msgCtx.reply('❌ Invalid number, try again.');
+            }
+
+            const settings = this.userSettings.get(chatId) || { amount: [], blacklist: [] };
+            // избегаем дубликатов (с малым допуском)
+            if (!settings.amount.some(a => this.floatEq(a, newVal))) {
+              settings.amount.push(newVal);
+            }
+            this.userSettings.set(chatId, settings);
+            this.saveUserData();
+
+            msgCtx.reply(`✅ Added fixed amount filter: ${newVal} SOL`);
+            this.bot.off('text', handler); // удаляем временный слушатель
+            this.showSettings(msgCtx);
+          };
+
+          this.bot.on('text', handler);
         });
 
+        // --- Обработчик для нажатия на существующую сумму (анкерованный) ---
+        this.bot.action(/^amount_([0-9_]+)$/, async (ctx) => {
+          await ctx.answerCbQuery();
+          const encoded = ctx.match[1];            // например "0_01"
+          const value = this.decodeAmount(encoded); // 0.01
+          const chatId = ctx.chat.id;
+
+          console.log('Selected amount button:', encoded, value);
+
+          const keyboard = Markup.inlineKeyboard([
+            [ Markup.button.callback('✏️ Edit', `amount_edit_${encoded}`) ],
+            [ Markup.button.callback('🗑️ Delete', `amount_delete_${encoded}`) ],
+            [ Markup.button.callback('⬅️ Back', 'open_settings') ]
+          ]);
+
+          // Экранируем для MarkdownV2
+          const esc = this.escapeMarkdownV2(value);
+          await ctx.replyWithMarkdownV2(`⚙️ Manage filter \`${esc} SOL\``, keyboard);
+        });
+
+        // --- Удаление фильтра (анкерованный, точный) ---
+        this.bot.action(/^amount_delete_([0-9_]+)$/, async (ctx) => {
+          await ctx.answerCbQuery();
+          const encoded = ctx.match[1];
+          const value = this.decodeAmount(encoded);
+          const chatId = ctx.chat.id;
+
+          console.log('Delete requested for:', encoded, value);
+
+          const settings = this.userSettings.get(chatId) || { amount: [], blacklist: [] };
+          // Удаляем все, близкие к value (поскольку точность float)
+          settings.amount = settings.amount.filter(a => !this.floatEq(a, value));
+          this.userSettings.set(chatId, settings);
+          await this.saveUserData();
+
+          await ctx.reply(`🗑️ Removed filter: ${value} SOL`);
+          this.showSettings(ctx);
+        });
+
+        // --- Редактирование фильтра (анкерованный) ---
+        this.bot.action(/^amount_edit_([0-9_]+)$/, async (ctx) => {
+          await ctx.answerCbQuery();
+          const encoded = ctx.match[1];
+          const oldValue = this.decodeAmount(encoded);
+          const chatId = ctx.chat.id;
+
+          await ctx.reply(`✏️ Enter new value for filter \`${oldValue} SOL\`:`);
+          const handler = (msgCtx) => {
+            if (msgCtx.chat.id !== chatId) return;
+            const newValue = parseFloat(msgCtx.message.text);
+            if (isNaN(newValue)) {
+              return msgCtx.reply('❌ Invalid number, try again.');
+            }
+
+            const settings = this.userSettings.get(chatId) || { amount: [], blacklist: [] };
+            const idx = settings.amount.findIndex(a => this.floatEq(a, oldValue));
+            if (idx !== -1) {
+              settings.amount[idx] = newValue;
+            } else {
+              // На всякий случай — добавим, если не нашли
+              settings.amount.push(newValue);
+            }
+            this.userSettings.set(chatId, settings);
+            this.saveUserData();
+
+            msgCtx.reply(`✅ Updated filter: ${oldValue} → ${newValue} SOL`);
+            this.bot.off('text', handler);
+            this.showSettings(msgCtx);
+          };
+
+          this.bot.on('text', handler);
+        });
+        
         this.bot.action('manage_blacklist', (ctx) => {
             ctx.answerCbQuery();
             const chatId = ctx.chat.id;
-            const settings = this.userSettings.get(chatId) || { minAmount: 0, blacklist: [] };
+            const settings = this.userSettings.get(chatId) || { amount: [], blacklist: [] };
             
             if (settings.blacklist.length === 0) {
                 ctx.reply('🚫 Your blacklist is empty.\nSend me a wallet address to add to blacklist:');
@@ -155,7 +258,7 @@ You will receive notifications on RevShare: PlatformFee transactions \\
             }
             
             if (this.isValidSolanaAddress(address)) {
-                const settings = this.userSettings.get(chatId) || { minAmount: 0, blacklist: [] };
+                const settings = this.userSettings.get(chatId) || { amount: [], blacklist: [] };
                 
                 if (!settings.blacklist.includes(address)) {
                     settings.blacklist.push(address);
@@ -177,7 +280,7 @@ You will receive notifications on RevShare: PlatformFee transactions \\
             }
             
             const index = parseInt(ctx.match[1]) - 1;
-            const settings = this.userSettings.get(chatId) || { minAmount: 0, blacklist: [] };
+            const settings = this.userSettings.get(chatId) || { amount: [], blacklist: [] };
             
             if (index >= 0 && index < settings.blacklist.length) {
                 const removed = settings.blacklist.splice(index, 1)[0];
@@ -199,32 +302,38 @@ You will receive notifications on RevShare: PlatformFee transactions \\
         }
     }
 
-    // общий метод для вызова меню настроек
+    // --- showSettings (показывает список фильтров как кнопки) ---
     async showSettings(ctx) {
-        const chatId = ctx.chat.id;
+      const chatId = ctx.chat.id;
 
-        if (!this.subscribedUsers.has(chatId)) {
-            return ctx.reply('❌ You need to /start first to subscribe to notifications.');
-        }
+      if (!this.subscribedUsers.has(chatId)) {
+        return ctx.reply('❌ You need to /start first to subscribe to notifications.');
+      }
 
-        const settings = this.userSettings.get(chatId) || {
-            minAmount: 0,
-            blacklist: []
-        };
+      const settings = this.userSettings.get(chatId) || { amount: [], blacklist: [] };
 
-        const keyboard = Markup.inlineKeyboard([
-            [Markup.button.callback('💰 Set min amount SOL', 'set_min_amount')],
-            [Markup.button.callback('🚫 Manage blacklist', 'manage_blacklist')]
-        ]);
+      const amountButtons = settings.amount.map(a => {
+        const encoded = this.encodeAmount(a);
+        return [ Markup.button.callback(`${a} SOL`, `amount_${encoded}`) ];
+      });
 
-        await ctx.replyWithMarkdownV2(`
+      const keyboard = Markup.inlineKeyboard([
+        ...amountButtons,
+        [ Markup.button.callback('➕ Add new amount', 'amount_add') ],
+        [ Markup.button.callback('🚫 Manage blacklist', 'manage_blacklist') ]
+      ]);
+
+      const amountsText = settings.amount.length > 0
+        ? settings.amount.map(a => this.escapeMarkdownV2(a)).join(', ')
+        : 'none';
+
+      await ctx.replyWithMarkdownV2(`
     ⚙️ *Current Settings:*
 
-    💰 Minimum SOL Amount: ${settings.minAmount}
+    💰 Fixed SOL Amounts: ${amountsText}
     🚫 Blacklisted Addresses: ${settings.blacklist.length}
-        `, keyboard);
+      `, keyboard);
     }
-
 
     async startMonitoring() {
         if (!this.monitoredWallet) {
@@ -431,11 +540,11 @@ You will receive notifications on RevShare: PlatformFee transactions \\
         // Отправляем каждому пользователю
         for (const chatId of this.subscribedUsers) {
             try {
-                const settings = this.userSettings.get(chatId) || { minAmount: 0, blacklist: [] };
+                const settings = this.userSettings.get(chatId) || { amount: [], blacklist: [] };
 
                 // Фильтры
-                if (transfer.amount < settings.minAmount) {
-                    console.log(`💰 Transfer ${transfer.amount} SOL below minimum ${settings.minAmount} SOL for user ${chatId}`);
+                if (!settings.amount.includes(transfer.amount)) {
+                    console.log(`💰 Transfer ${transfer.amount} SOL doesn't match any fixed values for user ${chatId}`);
                     continue;
                 }
                 if (settings.blacklist.includes(transfer.from)) {
