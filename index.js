@@ -15,7 +15,7 @@ class SolanaWalletMonitor {
         // Single wallet from environment
         this.monitoredWallet = process.env.WALLET_ADDRESS;
         
-        this.fixedSolAmounts = [0.1, 0.15, 0.3];
+        this.fixedSolAmounts = [0.01, 0.1, 0.15, 0.3];
         this.subscribedUsers = new Set();
         this.lastSignature = null;
         this.monitoringInterval = null;
@@ -230,41 +230,22 @@ You will receive notifications on RevShare: PlatformFee transactions\\
             // Calculate balance change for target wallet
             const balanceChange = (postBalances[targetIndex] - preBalances[targetIndex]) / 1e9; // Convert lamports to SOL
             
-            if (balanceChange > 0) {
-                // Incoming transfer - find sender
-                for (let i = 0; i < accountKeys.length; i++) {
-                    if (i !== targetIndex) {
-                        const senderBalanceChange = (preBalances[i] - postBalances[i]) / 1e9;
-                        // Allow for some variance due to fees
-                        if (Math.abs(senderBalanceChange - balanceChange) < 0.001) {
-                            transfers.push({
-                                from: accountKeys[i].toString(),
-                                to: targetWallet,
-                                amount: balanceChange,
-                                type: 'incoming'
-                            });
-                            break;
-                        }
-                    }
-                }
-            } else if (balanceChange < 0) {
-                // Outgoing transfer - find receiver
-                for (let i = 0; i < accountKeys.length; i++) {
-                    if (i !== targetIndex) {
-                        const receiverBalanceChange = (postBalances[i] - preBalances[i]) / 1e9;
-                        if (receiverBalanceChange > 0 && Math.abs(receiverBalanceChange + balanceChange) < 0.001) {
-                            transfers.push({
-                                from: targetWallet,
-                                to: accountKeys[i].toString(),
-                                amount: Math.abs(balanceChange),
-                                type: 'outgoing'
-                            });
-                            break;
-                        }
+            // Incoming transfer - find sender
+            for (let i = 0; i < accountKeys.length; i++) {
+                if (i !== targetIndex) {
+                    const senderBalanceChange = (postBalances[i] - preBalances[i]) / 1e9;
+                    // Allow for some variance due to fees
+                    if (senderBalanceChange < 0) {
+                        transfers.push({
+                            from: accountKeys[i].toString(),
+                            to: targetWallet,
+                            amount: balanceChange,
+                            type: 'incoming'
+                        });
+                        break;
                     }
                 }
             }
-            
         } catch (error) {
             console.error('Error parsing SOL transfers:', error);
         }
