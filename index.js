@@ -543,7 +543,7 @@ You will receive notifications on RevShare: PlatformFee transactions\\
                 const settings = this.userSettings.get(chatId) || { amount: [], blacklist: [] };
 
                 // Фильтры
-                if (!settings.amount.includes(transfer.amount)) {
+                if (settings.amount.length = 0 && !settings.amount.includes(transfer.amount)) {
                     console.log(`💰 Transfer ${transfer.amount} SOL doesn't match any fixed values for user ${chatId}`);
                     continue;
                 }

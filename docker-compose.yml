@@ -1,0 +1,12 @@
+version: "3.9"
+
+services:
+  solana-bot:
+    build: .
+    container_name: solana_bot
+    restart: always
+    environment:
+      - BOT_TOKEN="8444135567:AAEJNzs4DwdF8oEeu0IzZSDi4TzBlve1CFs"
+      - SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+    volumes:
+      - ./data:/app/data
